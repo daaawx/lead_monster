@@ -11,4 +11,7 @@
 
 5. Fine-tune the search as needed, then click "Run LeadMonster" to begin the process.
 
+#### Blacklist companies
+Enter company names in `blacklist.txt` to exclude companies.
+
 ![run](images/run.png)

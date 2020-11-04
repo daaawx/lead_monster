@@ -562,7 +562,7 @@ class SeleniumBot:
         except Exception as e:
             print(e)
 
-    def scroll_until_end(self, selector, wait=5):
+    def scroll_until_end(self, selector, wait=5, max_total=None):
         while True:
             els = self.css(selector, getall=True)
             total = len(els)
@@ -572,6 +572,8 @@ class SeleniumBot:
                 time.sleep(2)
                 if time.time() > timeout:
                     return
+            if max_total and total >= max_total:
+                return
 
     def scroll_to_bottom(self, times=1):
         for _ in range(times):

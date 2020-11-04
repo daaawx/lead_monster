@@ -1,4 +1,6 @@
 import csv
+import os
+import re
 import time
 from urllib.parse import quote_plus
 import chromedriver_autoinstaller
@@ -11,7 +13,7 @@ from SeleniumBot import SeleniumBot
 from email_generator.EmailGenerator import EmailGenerator
 
 __NAME__ = 'LeadMonster'
-__VERSION__ = '1.0'
+__VERSION__ = '1.1'
 __FIGLET__ = '''
   @@@@@@@@@@@@@@@@@@@@@@@@@@@0LfffffLL0@@@@@@@@@@@@@@@@@@@@
   @@@@@@@@@@@@@@0GGGGGCG0@@@ffG8@@@@8Gtt8@@@@@@@@@@@@@@@@@@
@@ -57,7 +59,7 @@ class Bot(SeleniumBot):
 
     EMPLOYEE_NO = '.jobs-details-job-summary__text--ellipsis'  # 3
 
-    JOB_CARD = '[data-job-id]'
+    JOB_CARD = '[data-job-id]>div>div>[href*="/jobs/view"]'
 
     JOB_POSTER = '.jobs-poster__wrapper'
     JOB_POSTER_TITLE = '.jobs-poster__headline'
@@ -65,6 +67,8 @@ class Bot(SeleniumBot):
     INDUSTRIES = '//h3[text()="Industry"]//following-sibling::ul//li'  # xpath list
 
     SEE_MORE = '[data-control-name="about_company_life_link"]'
+
+    NEXT_PAGE = '//li[contains(@class, "active")]//following-sibling::li'  # xpath
 
     # Page
     WEBSITE = 'dl a'
@@ -87,20 +91,27 @@ class Bot(SeleniumBot):
     DATA_DIR = r'User Data'
 
     @staticmethod
-    def get_posted_date(li):
+    def get_after_list(li, term):
         for idx, i in enumerate(li):
-            if 'Posted Date' in i:
+            if term in i:
                 return li[idx + 1]
         return None
+
+    @staticmethod
+    def lowercase_set(li):
+        return set(map(lambda x: x.lower(), li))
 
     def run(self):
         self.clean_up()
 
-        self.keyword = self.bot_print('Enter search keyword:', input_msg='> ')
+        self.search = self.bot_print('Enter search term:', input_msg='> ')
         self.location = self.bot_print('Enter location:', input_msg='> ')
-        job_count = int(self.bot_print('How many jobs?', input_msg='> '))
+        self.keywords = self.lowercase_set(
+            self.bot_print('Enter keywords (comma separated):', input_msg='> ').split(','))
+        self.max_company_size = int(self.bot_print('Enter company size (average max):', input_msg='> '))
+        job_count = int(self.bot_print('How many jobs to scrape?', input_msg='> '))
 
-        url = f"https://www.linkedin.com/jobs/search?keywords={self.keyword}&location={self.location}"
+        url = f"https://www.linkedin.com/jobs/search?keywords={self.search}&location={self.location}"
 
         if not self.driver:
             self.create_driver()
@@ -118,26 +129,25 @@ class Bot(SeleniumBot):
         if sign_in:
             self.get(url)
 
-        self.script('''
-        let span = document.createElement('span');
-        span.innerHTML = `<button id="runLM" style="background-color: #2db0ad;" class="artdeco-button artdeco-button--3 artdeco-button--primary ember-view mt4"> 
-        <span class="artdeco-button__text">
-            Run LeadMonster
-        </span></button>`;
-        let btn = span.firstElementChild;
-        document.querySelector('section .neptune-grid').appendChild(btn);
-        document.querySelector('#runLM').addEventListener('click', (e) => {
-           let lmBtn = document.querySelector('#runLM');
-           lmBtn.classList.add('run');
-           lmBtn.querySelector('span').innerHTML('Running...');
-        });
-        ''')
-        time.sleep(3)
+        while not self.script('''return document.querySelector('#runLM')'''):
+            self.script('''
+            let span = document.createElement('span');
+            span.innerHTML = `<button id="runLM" style="background-color: #2db0ad;" class="artdeco-button artdeco-button--3 artdeco-button--primary ember-view mt4"> 
+            <span class="artdeco-button__text">
+                Run LeadMonster
+            </span></button>`;
+            let btn = span.firstElementChild;
+            document.querySelector('section .neptune-grid').appendChild(btn);
+            document.querySelector('#runLM').addEventListener('click', (e) => {
+               let lmBtn = document.querySelector('#runLM');
+               lmBtn.classList.add('run');
+               lmBtn.querySelector('span').innerHTML = 'Running...';
+            });
+            ''')
+            time.sleep(3)
 
-        while True:
-            if self.script("return document.querySelector('#runLM').classList.contains('run')"):
-                break
-            time.sleep(1)
+        while not self.script("return document.querySelector('#runLM').classList.contains('run')"):
+            time.sleep(.3)
 
         while len(self.scraped_postings) < job_count:
             for _ in range(4):
@@ -147,12 +157,22 @@ class Bot(SeleniumBot):
                 )
                 time.sleep(1)
 
-            for card in self.css(self.JOB_CARD, getall=True):
-                self.click(card)
+            cards = self.css(self.JOB_CARD, getall=True)
+            for idx, card in enumerate(cards):
+                self.click(
+                    self.css(self.JOB_CARD, getall=True)[idx]
+                )
                 time.sleep(1.5)
                 self.parse_posting()
                 if len(self.scraped_postings) == job_count:
                     break
+
+            next_page = self.xpath(self.NEXT_PAGE)
+            if next_page:
+                self.click(next_page)
+                time.sleep(3)
+            else:
+                break
 
         self.bot_print(f"Scraped {len(self.scraped_postings)} jobs.")
         for posting in self.scraped_postings:
@@ -164,7 +184,10 @@ class Bot(SeleniumBot):
             if lead.get('Lead LinkedIn'):
                 self.parse_lead(lead)
 
-        filename = f'{len(self.lead_list)}_{self.keyword}_{self.location}.csv'
+        filename = os.path.join(
+            'data',
+            f'{len(self.lead_list)}_{self.search}_{self.location}.csv'
+        )
         self.export_csv(self.lead_list, filename)
         self.bot_print(f'Saved as {filename}')
 
@@ -180,32 +203,61 @@ class Bot(SeleniumBot):
                 self.driver.execute_script('window.close();')
                 return
 
-    def parse_posting(self):
-        location = self.css(self.JOB_LOCATION, attr='text').split('\n')
-        employees = self.css(self.EMPLOYEE_NO, attr='text', getall=True)
-        if employees:
-            try:
-                employees = employees[2]
-            except IndexError:
-                employees = 'Unknown'
-        scraped_data = {
-            'Job Title': self.css(self.JOB_TITLE, attr='text'),
-            'Job Location': location[3],
-            'Company': location[1],
-            'Posted': self.get_posted_date(self.css(self.POSTED, attr='text').split('\n')),
-            'Employees': employees,
-            'Industry': ', '.join(self.xpath(self.INDUSTRIES, attr='text', getall=True))
-        }
-        self.scraped_postings.append(scraped_data)
-        job_poster = self.css(self.JOB_POSTER, attr='text', getall=True)
-        if job_poster:
-            self.job_posters[id(scraped_data)] = job_poster[0]
-        else:
-            self.job_posters[id(scraped_data)] = ''
+    @staticmethod
+    def average_company_size(company_size):
+        cs = company_size.replace(',', '')
+        sizes = [int(i) for i in re.findall('\d+', cs) if i.isdigit()]
+        if not sizes:
+            return 1
+        return sum(sizes) / len(sizes)
 
-        see_more = self.css('[href$="/life/"]', attr='href')
-        if see_more:
-            scraped_data['Company LinkedIn'] = see_more.replace('/life/', '/about/')
+    def keyword_filter(self, description):
+        if any(True for i in self.keywords if i in description.lower()):
+            return True
+
+    def is_bad_posting(self, scraped_data):
+        company_size = self.average_company_size(scraped_data.get('Employees', '1'))
+        company_name = scraped_data.get('Company', '')
+        # Skip if company size > self.max_company_size
+        if company_size > self.max_company_size:
+            return True
+        # Skip if name in blacklist
+        if any(True for i in self.blacklist if i in company_name.lower()):
+            return True
+        return False
+
+    def parse_posting(self):
+        try:
+            location = self.css(self.JOB_LOCATION, attr='text').split('\n')
+            employees = self.css(self.EMPLOYEE_NO, attr='text', getall=True)
+            if employees:
+                try:
+                    employees = employees[2]
+                except IndexError:
+                    employees = 'Unknown'
+            scraped_data = {
+                'Job Title': self.css(self.JOB_TITLE, attr='text'),
+                'Job Location': self.get_after_list(location, 'Company Location'),
+                'Company': self.get_after_list(location, 'Company Name'),
+                'Posted': self.get_after_list(self.css(self.POSTED, attr='text').split('\n'), 'Posted Date'),
+                'Employees': employees,
+                'Industry': ', '.join(self.xpath(self.INDUSTRIES, attr='text', getall=True))
+            }
+            if self.is_bad_posting(scraped_data):
+                return
+            self.scraped_postings.append(scraped_data)
+            job_poster = self.css(self.JOB_POSTER, attr='text', getall=True)
+            if job_poster:
+                self.job_posters[id(scraped_data)] = job_poster[0]
+            else:
+                self.job_posters[id(scraped_data)] = ''
+
+            see_more = self.css('[href$="/life/"]', attr='href')
+            if see_more:
+                scraped_data['Company LinkedIn'] = see_more.replace('/life/', '/about/')
+        except Exception as e:
+            print(e)
+            return
 
     def parse_company(self, posting):
         url = posting.get('Company LinkedIn')
@@ -218,7 +270,7 @@ class Bot(SeleniumBot):
 
         self.click(self.PEOPLE_TAB, css=True)
         self.wait_show_element(self.PROFILE_CARDS, wait=5)
-        self.scroll_until_end(self.PROFILE_CARDS, wait=5)
+        self.scroll_until_end(self.PROFILE_CARDS, wait=5, max_total=self.max_company_size*2)
 
         cards = self.css(self.PROFILE_CARDS, getall=True)
         for card in track(cards, f'Processing {len(cards)} leads...'):
@@ -226,7 +278,7 @@ class Bot(SeleniumBot):
             if lead_name:
                 lead_name = lead_name.strip()
                 desc = self.css(self.CARD_DESC, node=card, attr='text').lower()
-                if self.keyword.lower() in desc:
+                if self.keyword_filter(desc):
                     temp_obj = posting.copy()
                     try:
                         temp_obj.update({
@@ -284,10 +336,10 @@ class Bot(SeleniumBot):
                 chrome_options.add_extension(f'{ext}.zip')
 
         chrome_options.add_argument("--silent")
-        # chrome_options.add_argument('--no-sandbox')
-        # chrome_options.add_argument('--disable-gpu')
+        chrome_options.add_argument('--no-sandbox')
+        chrome_options.add_argument('--disable-gpu')
         chrome_options.add_argument("--log-level=3")
-        # chrome_options.add_argument('--start-maximized')
+        chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument('--disable-infobars')
         # # chrome_options.add_argument("--disable-extensions")
         # chrome_options.add_experimental_option('useAutomationExtension', False)
@@ -343,13 +395,17 @@ class Bot(SeleniumBot):
             return input(input_msg)
 
     def clean_up(self):
-        self.keyword = ''
+        self.search = ''
+        self.keywords = []
+        self.max_company_size = 9999999
         self.location = ''
         self.job_posters = {}
         self.scraped_postings = []
         self.lead_list = []
         self.output = []
         self.email_generator = EmailGenerator()
+        with open('blacklist.txt') as f:
+            self.blacklist = self.lowercase_set([i.strip() for i in f.readlines() if i.strip()])
 
     def __init__(self):
         pretty.install()
@@ -359,13 +415,21 @@ class Bot(SeleniumBot):
         self.bot_print('Checking chromedriver version...')
         chromedriver_autoinstaller.install(cwd=True)
 
-        self.keyword = ''
+        self.search = ''
+        self.keywords = []
         self.location = ''
+        self.max_company_size = 9999999
         self.job_posters = {}
         self.scraped_postings = []
         self.lead_list = []
         self.output = []
         self.email_generator = EmailGenerator()
+        with open('blacklist.txt') as f:
+            self.blacklist = self.lowercase_set([i.strip().lower() for i in f.readlines() if i.strip()])
+
+        # Create folders
+        if not os.path.exists('data'):
+            os.mkdir('./data')
 
 
 if __name__ == '__main__':
