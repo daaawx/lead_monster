@@ -2,6 +2,7 @@ import csv
 import os
 import re
 import time
+import traceback
 from urllib.parse import quote_plus
 import chromedriver_autoinstaller
 import pandas as pd
@@ -13,7 +14,7 @@ from SeleniumBot import SeleniumBot
 from email_generator.EmailGenerator import EmailGenerator
 
 __NAME__ = 'LeadMonster'
-__VERSION__ = '1.1'
+__VERSION__ = '1.2'
 __FIGLET__ = '''
   @@@@@@@@@@@@@@@@@@@@@@@@@@@0LfffffLL0@@@@@@@@@@@@@@@@@@@@
   @@@@@@@@@@@@@@0GGGGGCG0@@@ffG8@@@@8Gtt8@@@@@@@@@@@@@@@@@@
@@ -40,12 +41,15 @@ __FIGLET__ = '''
   @@@@@@@@@@@G::i;itfttffffffffffffffffti;i1fG@@@@@@@@@@@@@
   @@@@@@@@@@@@@Cttfi;:,;i11i1tttt1iiii11L08@@@@@@@@@@@@@@@@
   @@@@@@@@@@@@@@@@@@0G80f1tttfttttLG008@@@@@@@@@@@@@@@@@@@@
-  _                   _ __  __                 _
- | |    ___  __ _  __| |  \/  | ___  _ __  ___| |_ ___ _ __
- | |   / _ \/ _` |/ _` | |\/| |/ _ \| '_ \/ __| __/ _ \ '__|
- | |__|  __/ (_| | (_| | |  | | (_) | | | \__ \ ||  __/ |
- |_____\___|\__,_|\__,_|_|  |_|\___/|_| |_|___/\__\___|_|
+▄▄▌  ▄▄▄ . ▄▄▄· ·▄▄▄▄  • ▌ ▄ ·.        ▐ ▄ .▄▄ · ▄▄▄▄▄▄▄▄ .▄▄▄
+██•  ▀▄.▀·▐█ ▀█ ██▪ ██ ·██ ▐███▪▪     •█▌▐█▐█ ▀. •██  ▀▄.▀·▀▄ █·
+██▪  ▐▀▀▪▄▄█▀▀█ ▐█· ▐█▌▐█ ▌▐▌▐█· ▄█▀▄ ▐█▐▐▌▄▀▀▀█▄ ▐█.▪▐▀▀▪▄▐▀▀▄
+▐█▌▐▌▐█▄▄▌▐█ ▪▐▌██. ██ ██ ██▌▐█▌▐█▌.▐▌██▐█▌▐█▄▪▐█ ▐█▌·▐█▄▄▌▐█•█▌
+.▀▀▀  ▀▀▀  ▀  ▀ ▀▀▀▀▀• ▀▀  █▪▀▀▀ ▀█▄▀▪▀▀ █▪ ▀▀▀▀  ▀▀▀  ▀▀▀ .▀  ▀
 
+                          ░▀█░░░░░▀▀▄
+                          ░░█░░░░░▄▀░
+                          ░▀▀▀░▀░░▀▀▀
 '''
 
 
@@ -256,60 +260,72 @@ class Bot(SeleniumBot):
             if see_more:
                 scraped_data['Company LinkedIn'] = see_more.replace('/life/', '/about/')
         except Exception as e:
-            print(e)
-            return
+            e = traceback.format_exc()
+            bot.log(screenshot=True, error=e)
 
     def parse_company(self, posting):
-        url = posting.get('Company LinkedIn')
-        self.get(url)
-        website = self.css(self.WEBSITE, attr='href')
-        if website:
-            posting['Company URL'] = website
-        else:
-            self.scrape_company_url(posting)
+        try:
+            url = posting.get('Company LinkedIn')
+            self.get(url)
+            website = self.css(self.WEBSITE, attr='href')
+            if website:
+                posting['Company URL'] = website
+            else:
+                self.scrape_company_url(posting)
 
-        self.click(self.PEOPLE_TAB, css=True)
-        self.wait_show_element(self.PROFILE_CARDS, wait=5)
-        self.scroll_until_end(self.PROFILE_CARDS, wait=5, max_total=self.max_company_size*2)
+            self.click(self.PEOPLE_TAB, css=True)
+            self.wait_show_element(self.PROFILE_CARDS, wait=5)
+            self.scroll_until_end(self.PROFILE_CARDS, wait=5, max_total=self.max_company_size * 2)
 
-        cards = self.css(self.PROFILE_CARDS, getall=True)
-        for card in track(cards, f'Processing {len(cards)} leads...'):
-            lead_name = self.css(self.CARD_NAME, node=card, attr='text')
-            if lead_name:
-                lead_name = lead_name.strip()
-                desc = self.css(self.CARD_DESC, node=card, attr='text').lower()
-                if self.keyword_filter(desc):
-                    temp_obj = posting.copy()
-                    try:
-                        temp_obj.update({
-                            'Lead - First Name': lead_name.split(' ', 1)[0],
-                            'Lead - Last Name': lead_name.split(' ', 1)[1],
-                            'Did Lead Post Job (Y/N)?': 'Y' if lead_name.lower() in str(
-                                self.job_posters[id(posting)]).lower() else 'N',
-                            'Location': posting.get('Job Location'),
-                            'Lead LinkedIn': self.css(self.CARD_LINK, node=card, attr='href'),
-                        })
-                        email, status = self.email_generator.get_email_and_status(temp_obj)
-                        temp_obj['Email'] = email
-                        self.lead_list.append(temp_obj)
-                    except Exception as e:
-                        print(e)
+            cards = self.css(self.PROFILE_CARDS, getall=True)
+            for card in track(cards, f'Processing {len(cards)} leads...'):
+                lead_name = self.css(self.CARD_NAME, node=card, attr='text')
+                if lead_name:
+                    lead_name = lead_name.strip()
+                    desc = self.css(self.CARD_DESC, node=card, attr='text').lower()
+                    if self.keyword_filter(desc):
+                        temp_obj = posting.copy()
+                        try:
+                            temp_obj.update({
+                                'Lead - First Name': lead_name.split(' ', 1)[0],
+                                'Lead - Last Name': lead_name.split(' ', 1)[1],
+                                'Did Lead Post Job (Y/N)?': 'Y' if lead_name.lower() in str(
+                                    self.job_posters[id(posting)]).lower() else 'N',
+                                'Location': posting.get('Job Location'),
+                                'Lead LinkedIn': self.css(self.CARD_LINK, node=card, attr='href'),
+                            })
+                            email, status = self.email_generator.get_email_and_status(temp_obj)
+                            temp_obj['Email'] = email
+                            self.lead_list.append(temp_obj)
+                        except Exception as e:
+                            print(e)
+        except Exception as e:
+            e = traceback.format_exc()
+            bot.log(screenshot=True, error=e)
 
     def parse_lead(self, lead):
-        url = lead.get('Lead LinkedIn')
-        self.get(url)
-        lead.update({
-            'Lead - Job Title': self.css(self.LEAD_TITLE, attr='text'),
-            'Lead - Location': self.css(self.LEAD_LOCATION, attr='text'),
-            'Lead - University': self.get_university(),
-        })
+        try:
+            url = lead.get('Lead LinkedIn')
+            self.get(url)
+            lead.update({
+                'Lead - Job Title': self.css(self.LEAD_TITLE, attr='text'),
+                'Lead - Location': self.css(self.LEAD_LOCATION, attr='text'),
+                'Lead - University': self.get_university(),
+            })
+        except Exception as e:
+            e = traceback.format_exc()
+            bot.log(screenshot=True, error=e)
 
     def get_university(self):
-        education = self.css(self.LEAD_UNIVERSITY, attr='text', getall=True)
-        for edu in education:
-            if 'university' in edu.lower():
-                return edu
-        return 'Not provided'
+        try:
+            education = self.css(self.LEAD_UNIVERSITY, attr='text', getall=True)
+            for edu in education:
+                if 'university' in edu.lower():
+                    return edu
+            return 'Not provided'
+        except Exception as e:
+            e = traceback.format_exc()
+            bot.log(screenshot=True, error=e)
 
     def create_driver(self):
 
