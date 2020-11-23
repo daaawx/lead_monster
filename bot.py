@@ -1,5 +1,8 @@
+import configparser
 import csv
+import json
 import os
+import random
 import re
 import time
 import traceback
@@ -12,9 +15,10 @@ from rich.progress import track
 from selenium import webdriver
 from SeleniumBot import SeleniumBot
 from email_generator.EmailGenerator import EmailGenerator
+from utils import generate_md5
 
 __NAME__ = 'LeadMonster'
-__VERSION__ = '1.2'
+__VERSION__ = '1.3'
 __FIGLET__ = '''
   @@@@@@@@@@@@@@@@@@@@@@@@@@@0LfffffLL0@@@@@@@@@@@@@@@@@@@@
   @@@@@@@@@@@@@@0GGGGGCG0@@@ffG8@@@@8Gtt8@@@@@@@@@@@@@@@@@@
@@ -47,10 +51,12 @@ __FIGLET__ = '''
 ▐█▌▐▌▐█▄▄▌▐█ ▪▐▌██. ██ ██ ██▌▐█▌▐█▌.▐▌██▐█▌▐█▄▪▐█ ▐█▌·▐█▄▄▌▐█•█▌
 .▀▀▀  ▀▀▀  ▀  ▀ ▀▀▀▀▀• ▀▀  █▪▀▀▀ ▀█▄▀▪▀▀ █▪ ▀▀▀▀  ▀▀▀  ▀▀▀ .▀  ▀
 
-                          ░▀█░░░░░▀▀▄
-                          ░░█░░░░░▄▀░
-                          ░▀▀▀░▀░░▀▀▀
+                          ░▀█░░░░░▀▀█
+                          ░░█░░░░░░▀▄
+                          ░▀▀▀░▀░░▀▀░
 '''
+
+DATE_FILTERS = ['daily', 'weekly', 'monthly']
 
 
 class Bot(SeleniumBot):
@@ -65,8 +71,8 @@ class Bot(SeleniumBot):
 
     JOB_CARD = '[data-job-id]>div>div>[href*="/jobs/view"]'
 
-    JOB_POSTER = '.jobs-poster__wrapper'
-    JOB_POSTER_TITLE = '.jobs-poster__headline'
+    JOB_POSTER_NAME = '.jobs-poster__name'
+    JOB_POSTER_LINK = '[data-control-name="jobdetails_profile_poster"]'
 
     INDUSTRIES = '//h3[text()="Industry"]//following-sibling::ul//li'  # xpath list
 
@@ -88,7 +94,10 @@ class Bot(SeleniumBot):
 
     LEAD_TITLE = 'h2.break-words'
     LEAD_LOCATION = '.pv-top-card--list-bullet li.t-16'
-    LEAD_UNIVERSITY = '.pv-education-entity h3'
+    LEAD_UNIVERSITY = '.pv-entity__degree-info h3'
+
+    CONTACT_INFO = '//*[text()="Contact Info"]'  # xpath
+    CONTACT_INFO_LINKS = 'a.pv-contact-info__contact-link'
 
     # DEV_SETTINGS = True
     # HEADLESS = True
@@ -105,16 +114,48 @@ class Bot(SeleniumBot):
     def lowercase_set(li):
         return set(map(lambda x: x.lower(), li))
 
+    def save_posting_history(self, posting_hash):
+        self.posting_history.append(posting_hash)
+        try:
+            with open('posting_history.json') as f:
+                obj = json.loads(f.read())
+        except:
+            obj = []
+        obj.append(posting_hash)
+        with open('posting_history.json', 'w') as f:
+            f.write(json.dumps(obj))
+
+    def random_delay(self):
+        if self.max_random_delay:
+            time.sleep(random.uniform(0.1, self.max_random_delay))
+
     def run(self):
         self.clean_up()
 
-        self.search = self.bot_print('Enter search term:', input_msg='> ')
-        self.location = self.bot_print('Enter location:', input_msg='> ')
-        self.keywords = self.lowercase_set(
-            self.bot_print('Enter keywords (comma separated):', input_msg='> ').split(','))
-        self.max_company_size = int(self.bot_print('Enter company size (average max):', input_msg='> '))
-        job_count = int(self.bot_print('How many jobs to scrape?', input_msg='> '))
+        if self.automatic:
+            self.bot_print('Automatic mode enabled.')
+            obj = self.read_csv('auto.csv')
+            for search_conf in obj:
+                self.search = search_conf.get('search')
+                self.location = search_conf.get('location')
+                self.keywords = self.lowercase_set(search_conf.get('keywords', '').split(','))
+                self.max_company_size = int(search_conf.get('max_company_size', 0))
+                self.job_count = int(search_conf.get('job_count', 0))
+                self.date_filter = search_conf.get('date_filter', '').strip()
+                self._run()
+            quit()
+        else:
+            self.search = self.bot_print('Enter search term:', input_msg='> ')
+            self.location = self.bot_print('Enter location:', input_msg='> ')
+            self.keywords = self.lowercase_set(
+                self.bot_print('Lead keywords (comma separated):', input_msg='> ').split(','))
+            self.max_company_size = int(self.bot_print('Enter max company size:', input_msg='> '))
+            self.job_count = int(self.bot_print('How many jobs to scrape?', input_msg='> '))
+            self._run()
 
+    def _run(self):
+        self.bot_print(
+            f'{self.search} @ {self.location} [<{self.max_company_size}] [{self.job_count}]')
         url = f"https://www.linkedin.com/jobs/search?keywords={self.search}&location={self.location}"
 
         if not self.driver:
@@ -133,33 +174,49 @@ class Bot(SeleniumBot):
         if sign_in:
             self.get(url)
 
-        while not self.script('''return document.querySelector('#runLM')'''):
-            self.script('''
-            let span = document.createElement('span');
-            span.innerHTML = `<button id="runLM" style="background-color: #2db0ad;" class="artdeco-button artdeco-button--3 artdeco-button--primary ember-view mt4"> 
-            <span class="artdeco-button__text">
-                Run LeadMonster
-            </span></button>`;
-            let btn = span.firstElementChild;
-            document.querySelector('section .neptune-grid').appendChild(btn);
-            document.querySelector('#runLM').addEventListener('click', (e) => {
-               let lmBtn = document.querySelector('#runLM');
-               lmBtn.classList.add('run');
-               lmBtn.querySelector('span').innerHTML = 'Running...';
-            });
-            ''')
-            time.sleep(3)
+        if self.automatic:
+            if self.date_filter:
+                self.click('[aria-controls="date-posted-facet-values"]', css=True, wait=3)
+                date_radios = self.css('#date-posted-facet-values input', getall=True, wait_for=3)
+                if date_radios:
+                    self.click(date_radios[DATE_FILTERS.index(self.date_filter)])
+                    self.click('#date-posted-facet-values .artdeco-button--primary', css=True)
+                    time.sleep(3)
+        else:
+            while not self.script('''return document.querySelector('#runLM')'''):
+                self.script('''
+                let span = document.createElement('span');
+                span.innerHTML = `<button id="runLM" style="background-color: #2db0ad;" class="artdeco-button artdeco-button--3 artdeco-button--primary ember-view mt4"> 
+                <span class="artdeco-button__text">
+                    Run LeadMonster
+                </span></button>`;
+                let btn = span.firstElementChild;
+                document.querySelector('section .neptune-grid').appendChild(btn);
+                document.querySelector('#runLM').addEventListener('click', (e) => {
+                   let lmBtn = document.querySelector('#runLM');
+                   lmBtn.classList.add('run');
+                   lmBtn.querySelector('span').innerHTML = 'Running...';
+                });
+                ''')
+                time.sleep(3)
 
-        while not self.script("return document.querySelector('#runLM').classList.contains('run')"):
-            time.sleep(.3)
+            while not self.script("return document.querySelector('#runLM').classList.contains('run')"):
+                time.sleep(.3)
 
-        while len(self.scraped_postings) < job_count:
+        page = 1
+        while len(self.scraped_postings) < self.job_count:
+            self.bot_print(
+                f'{self.search} @ {self.location} [<{self.max_company_size}] [{len(self.scraped_postings)}/{self.job_count}] [Page {page}]')
             for _ in range(4):
+                job_cards = self.css(self.JOB_CARD, getall=True, wait=3)
+                if not job_cards:
+                    break
+
                 self.script(
                     'arguments[0].scrollIntoView()',
-                    self.css(self.JOB_CARD, getall=True)[-1],
+                    job_cards[-1],
                 )
-                time.sleep(1)
+                time.sleep(1.5)
 
             cards = self.css(self.JOB_CARD, getall=True)
             for idx, card in enumerate(cards):
@@ -168,12 +225,13 @@ class Bot(SeleniumBot):
                 )
                 time.sleep(1.5)
                 self.parse_posting()
-                if len(self.scraped_postings) == job_count:
+                if len(self.scraped_postings) == self.job_count:
                     break
 
             next_page = self.xpath(self.NEXT_PAGE)
             if next_page:
                 self.click(next_page)
+                page += 1
                 time.sleep(3)
             else:
                 break
@@ -215,12 +273,20 @@ class Bot(SeleniumBot):
             return 1
         return sum(sizes) / len(sizes)
 
+    @staticmethod
+    def highest_company_size(company_size):
+        cs = company_size.replace(',', '')
+        sizes = [int(i) for i in re.findall('\d+', cs) if i.isdigit()]
+        if not sizes:
+            return 1
+        return sizes[-1]
+
     def keyword_filter(self, description):
         if any(True for i in self.keywords if i in description.lower()):
             return True
 
     def is_bad_posting(self, scraped_data):
-        company_size = self.average_company_size(scraped_data.get('Employees', '1'))
+        company_size = self.highest_company_size(scraped_data.get('Employees', '1'))
         company_name = scraped_data.get('Company', '')
         # Skip if company size > self.max_company_size
         if company_size > self.max_company_size:
@@ -247,14 +313,23 @@ class Bot(SeleniumBot):
                 'Employees': employees,
                 'Industry': ', '.join(self.xpath(self.INDUSTRIES, attr='text', getall=True))
             }
+            posting_hash = generate_md5(str(scraped_data))
+            if posting_hash in self.posting_history:
+                self.bot_print('Posting already in history. Skipping.')
+                return
             if self.is_bad_posting(scraped_data):
                 return
+            self.save_posting_history(posting_hash)
             self.scraped_postings.append(scraped_data)
-            job_poster = self.css(self.JOB_POSTER, attr='text', getall=True)
+            job_poster = self.css(self.JOB_POSTER_NAME, attr='text')
             if job_poster:
-                self.job_posters[id(scraped_data)] = job_poster[0]
-            else:
-                self.job_posters[id(scraped_data)] = ''
+                scraped_data.update({
+                    'Lead - First Name': job_poster.split(' ', 1)[0],
+                    'Lead - Last Name': job_poster.split(' ', 1)[1],
+                    'Did Lead Post Job (Y/N)?': 'Y',
+                    'Location': scraped_data.get('Job Location'),
+                    'Lead LinkedIn': self.css(self.JOB_POSTER_LINK, attr='href'),
+                })
 
             see_more = self.css('[href$="/life/"]', attr='href')
             if see_more:
@@ -265,6 +340,7 @@ class Bot(SeleniumBot):
 
     def parse_company(self, posting):
         try:
+
             url = posting.get('Company LinkedIn')
             self.get(url)
             website = self.css(self.WEBSITE, attr='href')
@@ -273,12 +349,22 @@ class Bot(SeleniumBot):
             else:
                 self.scrape_company_url(posting)
 
+            poster = posting.get('Lead - First Name')
+            if poster:
+                temp_obj = posting.copy()
+                email, status = self.email_generator.get_email_and_status(temp_obj)
+                temp_obj['Email'] = email
+                self.lead_list.append(temp_obj)
+                return
             self.click(self.PEOPLE_TAB, css=True)
             self.wait_show_element(self.PROFILE_CARDS, wait=5)
             self.scroll_until_end(self.PROFILE_CARDS, wait=5, max_total=self.max_company_size * 2)
 
             cards = self.css(self.PROFILE_CARDS, getall=True)
+            total_leads = 0
             for card in track(cards, f'Processing {len(cards)} leads...'):
+                if total_leads >= self.max_leads_per_company:
+                    break
                 lead_name = self.css(self.CARD_NAME, node=card, attr='text')
                 if lead_name:
                     lead_name = lead_name.strip()
@@ -289,14 +375,14 @@ class Bot(SeleniumBot):
                             temp_obj.update({
                                 'Lead - First Name': lead_name.split(' ', 1)[0],
                                 'Lead - Last Name': lead_name.split(' ', 1)[1],
-                                'Did Lead Post Job (Y/N)?': 'Y' if lead_name.lower() in str(
-                                    self.job_posters[id(posting)]).lower() else 'N',
+                                'Did Lead Post Job (Y/N)?': 'N',
                                 'Location': posting.get('Job Location'),
                                 'Lead LinkedIn': self.css(self.CARD_LINK, node=card, attr='href'),
                             })
                             email, status = self.email_generator.get_email_and_status(temp_obj)
                             temp_obj['Email'] = email
                             self.lead_list.append(temp_obj)
+                            total_leads += 1
                         except Exception as e:
                             print(e)
         except Exception as e:
@@ -308,10 +394,21 @@ class Bot(SeleniumBot):
             url = lead.get('Lead LinkedIn')
             self.get(url)
             lead.update({
+                'Lead - Contact Info': self.get_contact_info(),
                 'Lead - Job Title': self.css(self.LEAD_TITLE, attr='text'),
                 'Lead - Location': self.css(self.LEAD_LOCATION, attr='text'),
                 'Lead - University': self.get_university(),
             })
+        except Exception as e:
+            e = traceback.format_exc()
+            bot.log(screenshot=True, error=e)
+
+    def get_contact_info(self):
+        try:
+            self.click(self.CONTACT_INFO, xpath=True)
+            time.sleep(1)
+            '\n'.join(self.css(self.CONTACT_INFO_LINKS, attr='href', getall=True))
+            return 'Not found'
         except Exception as e:
             e = traceback.format_exc()
             bot.log(screenshot=True, error=e)
@@ -359,17 +456,14 @@ class Bot(SeleniumBot):
         chrome_options.add_argument('--disable-infobars')
         # # chrome_options.add_argument("--disable-extensions")
         # chrome_options.add_experimental_option('useAutomationExtension', False)
-        # chrome_options.add_argument('--disable-notifications')
+        chrome_options.add_argument('--disable-notifications')
         # chrome_options.add_argument("--disable-plugins-discovery")
         # # chrome_options.add_argument('--profile-directory=default')
-        # chrome_options.add_experimental_option("excludeSwitches",
-        #                                        ["enable-automation",
-        #                                         # "ignore-certificate-errors",
-        #                                         "safebrowing-disable-auto-update",
-        #                                         "disable-client-side-phishing-detection",
-        #                                         "safebrowsing-disable-download-protection",
-        #                                         "enable-logging"  # Disable logging
-        #                                         ])
+        chrome_options.add_experimental_option("excludeSwitches",
+                                               ["enable-automation",
+                                                # "ignore-certificate-errors",
+                                                "enable-logging"  # Disable logging
+                                                ])
 
         self.driver = webdriver.Chrome(options=chrome_options)
 
@@ -415,13 +509,16 @@ class Bot(SeleniumBot):
         self.keywords = []
         self.max_company_size = 9999999
         self.location = ''
-        self.job_posters = {}
         self.scraped_postings = []
         self.lead_list = []
         self.output = []
+        self.job_count = 0
+        self.date_filter = None
         self.email_generator = EmailGenerator()
         with open('blacklist.txt') as f:
             self.blacklist = self.lowercase_set([i.strip() for i in f.readlines() if i.strip()])
+        with open('posting_history.json') as f:
+            self.posting_history = json.loads(f.read())
 
     def __init__(self):
         pretty.install()
@@ -431,17 +528,26 @@ class Bot(SeleniumBot):
         self.bot_print('Checking chromedriver version...')
         chromedriver_autoinstaller.install(cwd=True)
 
+        config = configparser.ConfigParser()
+        config.read('config.txt')
+        self.automatic = config.getboolean('leadmonster', 'auto_mode')
+        self.max_leads_per_company = config.getint('leadmonster', 'max_leads_per_company')
+        self.max_random_delay = config.getint('leadmonster', 'max_random_delay')
+
         self.search = ''
         self.keywords = []
         self.location = ''
         self.max_company_size = 9999999
-        self.job_posters = {}
         self.scraped_postings = []
         self.lead_list = []
         self.output = []
+        self.job_count = 0
+        self.date_filter = None
         self.email_generator = EmailGenerator()
         with open('blacklist.txt') as f:
             self.blacklist = self.lowercase_set([i.strip().lower() for i in f.readlines() if i.strip()])
+        with open('posting_history.json') as f:
+            self.posting_history = json.loads(f.read())
 
         # Create folders
         if not os.path.exists('data'):

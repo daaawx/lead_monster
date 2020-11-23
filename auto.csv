@@ -1,0 +1,4 @@
+search,location,keywords,max_company_size,job_count,date_filter
+ceo,seattle,"ceo, chief",100,10,daily
+ceo,seattle,"ceo, chief",50,50,weekly
+ceo,seattle,"ceo, chief",50,50,monthly
