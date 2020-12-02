@@ -1,4 +1,4 @@
 [leadmonster]
-auto_mode = True
+auto_mode = False
 max_leads_per_company = 5
 max_random_delay = 0

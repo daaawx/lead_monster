@@ -186,12 +186,12 @@ class Bot(SeleniumBot):
             while not self.script('''return document.querySelector('#runLM')'''):
                 self.script('''
                 let span = document.createElement('span');
-                span.innerHTML = `<button id="runLM" style="background-color: #2db0ad;" class="artdeco-button artdeco-button--3 artdeco-button--primary ember-view mt4"> 
+                span.innerHTML = `<button id="runLM" style="background-color: #2db0ad;margin: 0 auto;display: block;" class="artdeco-button artdeco-button--3 artdeco-button--primary ember-view mt4"> 
                 <span class="artdeco-button__text">
                     Run LeadMonster
                 </span></button>`;
                 let btn = span.firstElementChild;
-                document.querySelector('section .neptune-grid').appendChild(btn);
+                document.querySelector('[aria-label="search filters"]').appendChild(btn);
                 document.querySelector('#runLM').addEventListener('click', (e) => {
                    let lmBtn = document.querySelector('#runLM');
                    lmBtn.classList.add('run');
