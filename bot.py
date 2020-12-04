@@ -78,7 +78,7 @@ class Bot(SeleniumBot):
 
     SEE_MORE = '[data-control-name="about_company_life_link"]'
 
-    NEXT_PAGE = '//li[contains(@class, "active")]//following-sibling::li'  # xpath
+    NEXT_PAGE = '//*[@class="jobs-search-two-pane__pagination"]//li[contains(@class, "active")]//following-sibling::li//button'  # xpath
 
     # Page
     WEBSITE = 'dl a'
@@ -230,7 +230,7 @@ class Bot(SeleniumBot):
 
             next_page = self.xpath(self.NEXT_PAGE)
             if next_page:
-                self.click(next_page)
+                self.driver.execute_script('arguments[0].click()', next_page)
                 page += 1
                 time.sleep(3)
             else:
